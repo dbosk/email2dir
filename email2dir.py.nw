@@ -1,0 +1,264 @@
+\documentclass[a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[british]{babel}
+\usepackage[hyphens]{url}
+\usepackage{hyperref}
+
+\usepackage{noweb}
+% Needed to relax penalty for breaking code chunks across pages, otherwise
+% there might be a lot of space following a code chunk.
+\def\nwendcode{\endtrivlist \endgroup}
+\let\nwdocspar=\smallbreak
+
+\usepackage[capitalize]{cleveref}
+
+\title{Viewing HTML emails properly from Mutt}
+\author{Daniel Bosk}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\clearpage
+@
+
+\section{Introduction, command-line usage}
+
+This is the documentation of the [[<<email2dir.py>>]] Python 3 script.
+It takes an HTML message, extracts the images and HTML into separate files that 
+can be handled by a web browser.
+It returns the main HTML file.
+The main purpose is to run it from within an email client like Mutt.
+
+To open an email for viewing in a web browser, the following usage is 
+recommended:
+\begin{verbatim}
+email2dir.py email.eml | xargs ${BROWSER}
+\end{verbatim}
+
+This originally started as a modification to Akkana Peck's 
+[[viewhtmlemail]]\footnote{%
+URL: \url{https://github.com/akkana/scripts/blob/master/viewhtmlmail}.
+}, but ended up as a complete rewrite.
+
+We use the standard structure for the script.
+We have import statements at the top in the [[<<imports>>]] code block.
+Then we have functions in the [[<<functions>>]] code block.
+Finally, we have a [[main]] function which is run if the script is run directly 
+but not if it is imported.
+<<email2dir.py>>=
+#!/usr/bin/env python3
+
+<<imports>>
+<<functions>>
+
+def main(argv):
+    <<main body>>
+
+if __name__ == '__main__':
+  sys.exit(main(sys.argv[1:]))
+@
+
+Since we rely on the [[sys]] module we need
+<<imports>>=
+import sys
+@
+
+\subsection{Parsing command-line arguments}
+
+The main body is
+<<main body>>=
+<<parse command-line arguments>>
+<<process command-line arguments and do main execution>>
+@
+
+To parse command-line arguments we will make use of [[argparse]]:
+<<imports>>=
+import argparse
+@
+
+We first create a parser, then set up the valid arguments and finally provide 
+the dictionary [[args]] containing each argument that was passed on the command 
+line.
+<<parse command-line arguments>>=
+argp = argparse.ArgumentParser(description="Transform email to web folder.")
+
+<<valid argparse arguments>>
+
+args = vars(argp.parse_args(argv[1:]))
+@
+
+\subsection{Processing command-line arguments, the main functionality}
+
+We expect a list of email files on the command line.
+<<valid argparse arguments>>=
+argp.add_argument("file", nargs="+", help="An email file to parse")
+@
+
+We want to process each email and put its contents in a temporary directory.
+We will use the same temporary directory for each file given, this allows the 
+following usage:
+\begin{verbatim}
+ls *.eml | xargs email2dir.py
+\end{verbatim}
+will put all emails in the same temporary directory.
+Whereas,
+\begin{verbatim}
+for f in $(ls *.eml); do email2dir.py $f; done
+\end{verbatim}
+will put each email into a separate temporary directory.
+
+We first create the directory and then process each file using the function 
+[[email2dir]] (defined in \cref{email2dir}).
+[[email2dir]] returns a list of file names that are HTML files, we want to 
+print those to [[stdout]].
+<<process command-line arguments and do main execution>>=
+tmpdir = tempfile.mkdtemp()
+for filename in args[file]:
+  try:
+    file_stream = open(filename)
+    for html_name in email2dir(file_stream, tmpdir):
+      print("{0}".format(html_name))
+  except Exception as err:
+    print("{0}: {1}".format(argv[0], err), file=sys.stderr)
+    return 1
+  finally:
+    if file_stream:
+      file_stream.close()
+return 0
+@
+
+
+\section{Transforming email files to HTML folders, module usage}
+
+The main processing is done in the function [[email2dir]].
+It takes two arguments: [[in_stream]], which is the input email file (as an 
+open file or byte stream of any kind); and [[out_dir]], which is the output 
+directory.
+\label{email2dir}
+<<functions>>=
+def email2dir(in_stream, out_dir):
+  with email.message_from_string(in_stream.read()) as msg:
+    <<read out files from msg, return html files>>
+@
+
+We divide the parts of an email into two classes: those parts that are HTML and 
+those that are not.
+Then we write them to file and map the content-IDs to the file names.
+<<read out files from msg, return html files>>=
+html_parts = {}
+other_parts = {}
+
+for part in msg.walk():
+  # multipart/* are just containers
+  if part.is_multipart() or part.get_content_type == 'message/rfc822':
+    continue
+  elif part.get_content_subtype() == 'html':
+    content_id, filename = write_part_to_file(part, out_dir)
+    html_parts[content_id] = filename
+  else:
+    content_id, filename = write_part_to_file(part, out_dir)
+    other_parts[content_id] = filename
+
+<<replace content-IDs with filenames in HTML>>
+
+return list(html_parts.values())
+@
+
+The function [[write_part_to_file]] takes a part, chooses a suitable file name 
+and writes the part into that file in the given output directory, [[out_dir]].
+<<functions>>=
+def write_part_to_file(part, out_dir):
+  content_id = None
+  filename = None
+
+  <<get the part's content-ID>>
+  <<generate a suitable file name from part>>
+  <<write the part to the file in out-dir>>
+
+  return content_id, filename
+@
+
+Each part has a set of MIME keys, one of which is the content-ID.
+<<get the part's content-ID>>=
+for key in list(part.keys()):
+  if key.lower() == 'content-id':
+    content_id = part[key]
+    if content_id.startswith('<') and content_id.endswith('>'):
+      content_id = content_id[1:-1]
+    break
+  else:
+    continue
+
+if not content_id:
+  content_id = hash(part)
+@
+
+For now, we are not interested in human readable file names.
+So we can just use the content-ID:
+<<generate a suitable file name from part>>=
+filename = content_id
+@
+
+Finally, we can write the payload of the part to the file in the output 
+directory, [[out_dir]].
+<<write the part to the file in out-dir>>=
+with open(os.path.join(out_dir, filename), "xb") as out_stream:
+  out_stream.write(part.get_payload(decode=True))
+  out_stream.close()
+@
+
+<<replace content-IDs with filenames in HTML>>=
+@
+
+<<process html part>>=
+# We're done saving the parts. It's time to save the HTML part.
+htmlfile = os.path.join(tmpdir, "viewhtml.html")
+fp = open(htmlfile, 'wb')
+htmlsrc = html_part.get_payload(decode=True)
+
+# Substitute all the filenames for CIDs:
+for sf in subfiles:
+    # Yes, yes, I know:
+    # https://stackoverflow.com/questions/1732348/regex-match-open-tags-except-xhtml-self-contained-tags/
+    # but eventually this script will be integrated with viewmailattachments
+    # (which uses BeautifulSoup) and that problem will go away.
+    htmlsrc = re.sub('cid: ?' + sf['Content-Id'],
+                      'file://' + sf['filename'],
+                      htmlsrc, flags=re.IGNORECASE)
+
+fp.write(htmlsrc)
+fp.close()
+
+# Now we have the file. Call a browser on it.
+browser = os.environ["BROWSER"]
+if not browser:
+    browser = "firefox"
+print("%s file://%s" % (browser, htmlfile))
+subprocess.call([browser, "file://%s" % htmlfile])
+@
+
+<<imports>>=
+import os
+import re
+# import time
+# import shutil
+import email
+import mimetypes
+import tempfile
+import subprocess
+@
+
+<<functions>>=
+def find_first_maildir_file(maildir):
+    '''Maildir: inside /tmp/mutttmpbox, mutt creates another level of
+       directory, so the file will be something like /tmp/mutttmpbox/cur/1.
+       So recurse into directories until we find an actual mail file.
+       Return a full path to the filename.
+    '''
+    for root, _, files in os.walk(maildir):
+        for file in files:
+            if not file.startswith('.'):
+                return os.path.join(root, file)
+    return None
+@
+\end{document}

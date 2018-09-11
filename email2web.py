@@ -1,30 +1,33 @@
-#! /usr/bin/env python
+#!/usr/bin/env python3
+"""
+Take an HTML message, extract the images and html into separate file that can 
+be handled by a web browser.
 
-# Take an mbox HTML message (e.g. from mutt), split it
-# and rewrite it so it can be viewed in an external browser.
-# Can be run from within a mailer like mutt, or independently
-# on a single message file.
-#
-# Usage: viewhtmlmail
-#
-# Inspired by John Eikenberry <jae@zhar.net>'s view_html_mail.sh
-# which sadly no longer works, at least with mail from current Apple Mail.
-#
-# Copyright 2013 by Akkana Peck. Share and enjoy under the GPL v2 or later.
-# Changes:
-#   Holger Klawitter 2014: create a secure temp file and avoid temp mbox
+Can be run from within a mailer like mutt, or independently
+on a single message file:
 
-# To use it from mutt, put the following lines in your .muttrc:
-# macro  index  <F10>  "<pipe-message>~/bin/viewhtmlmail\n" "View HTML in browser"
-# macro  pager  <F10>  "<pipe-message>~/bin/viewhtmlmail\n" "View HTML in browser"
+Usage: email2web <file0> [<file1> ...]
 
-import os, sys
+This originally started as a modification to Akkana Peck's viewhtmlemail [1], 
+but ended up as a complete rewrite.
+
+[1]: https://github.com/akkana/scripts/blob/master/viewhtmlmail
+
+To use it from mutt, put the following lines in your .muttrc:
+macro index <F10> "<pipe-message>~/bin/viewhtmlmail\n" "View HTML in browser"
+macro pager <F10> "<pipe-message>~/bin/viewhtmlmail\n" "View HTML in browser"
+"""
+
+import os
+import sys
 import re
-import time
-import shutil
-import email, mimetypes
+# import time
+# import shutil
+import email
+import mimetypes
 import tempfile
 import subprocess
+
 
 def find_first_maildir_file(maildir):
     '''Maildir: inside /tmp/mutttmpbox, mutt creates another level of
@@ -32,15 +35,18 @@ def find_first_maildir_file(maildir):
        So recurse into directories until we find an actual mail file.
        Return a full path to the filename.
     '''
-    for root, dirs, files in os.walk(maildir):
-        for f in files:
-            if not f.startswith('.'):
-                return os.path.join(root, f)
+    for root, _, files in os.walk(maildir):
+        for file in files:
+            if not file.startswith('.'):
+                return os.path.join(root, file)
     return None
 
-def view_html_message(f, tmpdir):
-    if f:
-        if os.path.isdir(f):
+
+def email2web(file, tmpdir):
+    """Function to convert an email, `file`, into a web directory,
+    i.e. to extract embedded images to the `tmpdir` directory."""
+    if file:
+        if os.path.isdir(file):
             # Maildir: f is a maildir like /tmp/mutttmpbox,
             # and inside it, for some reason, mutt creates another
             # level of directory named either cur or new
@@ -127,8 +133,8 @@ def view_html_message(f, tmpdir):
                 if content_id.startswith('<') and content_id.endswith('>'):
                     content_id = content_id[1:-1]
 
-                subfiles.append({ 'filename': filename,
-                                  'Content-Id': content_id })
+                subfiles.append({'filename': filename,
+                                 'Content-Id': content_id})
                 counter += 1
                 fp = open(filename, 'wb')
                 fp.write(part.get_payload(decode=True))
@@ -162,15 +168,22 @@ def view_html_message(f, tmpdir):
     fp.close()
 
     # Now we have the file. Call a browser on it.
-    print("Calling browser for file://%s" % htmlfile)
-    # subprocess.call(["firefox", "-new-window", "file://%s" % htmlfile])
-    subprocess.call(["quickbrowse", "file://%s" % htmlfile])
+    browser = os.environ["BROWSER"]
+    if not browser:
+        browser = "firefox"
+    print("%s file://%s" % (browser, htmlfile))
+    subprocess.call([browser, "file://%s" % htmlfile])
 
-    # Wait a while to make sure firefox has loaded the images, then clean up.
-    # time.sleep(6)
-    # shutil.rmtree(tmpdir)
+def main(argv):
+    """This is the main function"""
+    tmpdir = tempfile.mkdtemp()
+    for filename in argv[1:]:
+        try:
+            email2web(filename, tmpdir)
+        except Exception as e:
+            print(e, file=sys.stderr)
+            return -1
+    return 0
 
 if __name__ == '__main__':
-    tmpdir = tempfile.mkdtemp()
-    for f in sys.argv[1:]:
-        view_html_message(f, tmpdir)
+    sys.exit(main(sys.argv[1:]))

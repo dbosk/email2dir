@@ -107,13 +107,16 @@ for f in $(ls *.eml); do email2dir.py $f; done
 \end{verbatim}
 will put each email into a separate temporary directory.
 
-We first create the directory and then process each file using the function 
-[[email2dir]] (defined in \cref{email2dir}).
-[[email2dir]] returns a list of file names that are HTML files, we want to 
+We first create a temporary directory and then process each file using the 
+function [[email2dir]] (defined in \cref{email2dir}).
+We will use the [[tempfile]] module to create the temporary directory.
+<<imports>>=
+import tempfile
+@ [[email2dir]] returns a list of file names that are HTML files, we want to 
 print those to [[stdout]].
 <<process command-line arguments and do main execution>>=
 tmpdir = tempfile.mkdtemp()
-for filename in args[file]:
+for filename in args["file"]:
   try:
     file_stream = open(filename)
     for html_name in email2dir(file_stream, tmpdir):
@@ -134,12 +137,17 @@ The main processing is done in the function [[email2dir]].
 It takes two arguments: [[in_stream]], which is the input email file (as an 
 open file or byte stream of any kind); and [[out_dir]], which is the output 
 directory.
+We will use the [[email]] module for parsing.
+<<imports>>=
+import email
+@
+
 \label{email2dir}
 <<functions>>=
 def email2dir(in_stream, out_dir):
-  with email.message_from_string(in_stream.read()) as msg:
+  with email.message_from_file(in_stream) as msg:
     <<read out files from msg, return html files>>
-@
+@ This requires the [[email]] module.
 
 We divide the parts of an email into two classes: those parts that are HTML and 
 those that are not.
@@ -201,64 +209,41 @@ filename = content_id
 
 Finally, we can write the payload of the part to the file in the output 
 directory, [[out_dir]].
+Note that we require that the file does not exist ([[x]]).
 <<write the part to the file in out-dir>>=
 with open(os.path.join(out_dir, filename), "xb") as out_stream:
   out_stream.write(part.get_payload(decode=True))
   out_stream.close()
-@
-
-<<replace content-IDs with filenames in HTML>>=
-@
-
-<<process html part>>=
-# We're done saving the parts. It's time to save the HTML part.
-htmlfile = os.path.join(tmpdir, "viewhtml.html")
-fp = open(htmlfile, 'wb')
-htmlsrc = html_part.get_payload(decode=True)
-
-# Substitute all the filenames for CIDs:
-for sf in subfiles:
-    # Yes, yes, I know:
-    # https://stackoverflow.com/questions/1732348/regex-match-open-tags-except-xhtml-self-contained-tags/
-    # but eventually this script will be integrated with viewmailattachments
-    # (which uses BeautifulSoup) and that problem will go away.
-    htmlsrc = re.sub('cid: ?' + sf['Content-Id'],
-                      'file://' + sf['filename'],
-                      htmlsrc, flags=re.IGNORECASE)
-
-fp.write(htmlsrc)
-fp.close()
-
-# Now we have the file. Call a browser on it.
-browser = os.environ["BROWSER"]
-if not browser:
-    browser = "firefox"
-print("%s file://%s" % (browser, htmlfile))
-subprocess.call([browser, "file://%s" % htmlfile])
-@
-
+@ This requires the [[os]] module:
 <<imports>>=
 import os
-import re
-# import time
-# import shutil
-import email
-import mimetypes
-import tempfile
-import subprocess
 @
 
-<<functions>>=
-def find_first_maildir_file(maildir):
-    '''Maildir: inside /tmp/mutttmpbox, mutt creates another level of
-       directory, so the file will be something like /tmp/mutttmpbox/cur/1.
-       So recurse into directories until we find an actual mail file.
-       Return a full path to the filename.
-    '''
-    for root, _, files in os.walk(maildir):
-        for file in files:
-            if not file.startswith('.'):
-                return os.path.join(root, file)
-    return None
+We must now replace the content-ID references in the HTML with the 
+corresponding file name.
+We have already written the HTML files to disk.
+So now we must read them, make changes and then write them back.
+<<replace content-IDs with filenames in HTML>>=
+for html_file in html_parts.values():
+  html_src = None
+  with open(html_file) as html_in:
+    html_src = html_in.read()
+
+  <<set up regex and replace content-ID in html-src>>
+
+  with open(html_file) as html_out:
+    html_out.write(html_src)
 @
+
+We will use regular expressions to search for content-ID and replace it with 
+[[other_parts[content-ID]]].
+<<imports>>=
+import re
+<<set up regex and replace content-ID in html-src>>=
+for content_id in other_parts:
+  html_src = re.sub("cid: ?" + content_id,
+                    "file://" + other_parts[content_id],
+                    html_src, flags=re.IGNORECASE)
+@
+
 \end{document}
